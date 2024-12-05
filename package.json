@@ -1,0 +1,23 @@
+{
+  "name": "api",
+  "version": "1.0.0",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "react_server": "node --watch ./src/react_server_new_v6.js",
+    "mongo_server": "node ./src/server_mongo_new.js"
+  },
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "abi-decoder": "^2.4.0",
+    "dotenv": "^16.4.7",
+    "ethers": "^6.13.4",
+    "express": "^4.21.1",
+    "mongodb": "^6.11.0",
+    "viem": "^2.21.53",
+    "ws": "^8.18.0"
+  }
+}
