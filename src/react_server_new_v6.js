@@ -3,6 +3,7 @@ import WebSocket, { WebSocketServer } from 'ws';
 import express from 'express';
 import { vitruveo } from './chains/index.js';
 import { factoryAbi } from './abis/factoryAbi.js';
+import { poolAbi } from './abis/poolAbi.js';
 import config from './config/index.js';
 import { createPublicClient, getContract, http } from 'viem';
 import { formatEther } from 'viem';
@@ -32,62 +33,103 @@ const client = new MongoClient(MONGO_URI, {
 });
 const app = express();
 
-
 let lastCheckedBlock = startBlock;
 let cachedLiquidity = null;
 let lastLiquidityCalculationBlock = startBlock;
 
-app.get('/volume', async (req,res) => {
+app.get('/liquidity', async (req, res) => {
+  const tokens = await factory.read.getAllTokens();
+  const pools = await Promise.all(
+    tokens.map((token) => factory.read.getPool([token]))
+  );
+  const balances = await Promise.all(
+    pools.map(async (pool) => {
+      const virtualBalance = await publicClient.readContract({
+        abi: poolAbi,
+        address: pool,
+        functionName: 'virtualCoinBalance',
+      });
+
+      const realBalance = await publicClient.readContract({
+        abi: poolAbi,
+        address: pool,
+        functionName: 'realCoinBalance',
+      });
+
+      return virtualBalance + realBalance;
+    })
+  );
+
+  const liquidity = balances
+    .reduce((sum, amount) => sum + +formatEther(amount), 0)
+    .toFixed(2);
+
+  res.json({ liquidity });
+});
+
+app.get('/volume', async (req, res) => {
   const db = client.db(DB_NAME);
   const collection = db.collection(collectionName);
-  
 
-  const totalVolume = await collection.aggregate([
-    {
-      $match: { vtruAmount: { $exists: true } } 
-    },
-    {$addFields: {
-      numericValue: { $toLong: "$vtruAmount" }
-    }},
-    {
-      $group: {
-        _id: null, 
-        totalVtruAmount: { $sum: "$numericValue" } 
-      }
-    },
-    {
-      $project: { _id: 0, totalVtruAmount: 1 } // Step 3: Format the output
-    }
-  ]).toArray()
+  const totalVolume = await collection
+    .aggregate([
+      {
+        $match: { vtruAmount: { $exists: true } },
+      },
+      {
+        $addFields: {
+          numericValue: { $toLong: '$vtruAmount' },
+        },
+      },
+      {
+        $group: {
+          _id: null,
+          totalVtruAmount: { $sum: '$numericValue' },
+        },
+      },
+      {
+        $project: { _id: 0, totalVtruAmount: 1 }, // Step 3: Format the output
+      },
+    ])
+    .toArray();
 
   const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
-  const totalVolume24 = await collection.aggregate([
-    {
-      $match: { vtruAmount: { $exists: true }, timestamp: { $gte: oneDayAgo.valueOf() } } 
-    },
-    {$addFields: {
-      numericValue: { $toLong: "$vtruAmount" }
-    }},
-    {
-      $group: {
-        _id: null, 
-        totalVtruAmount24: { $sum: "$numericValue" } 
-      }
-    },
-    {
-      $project: { _id: 0, totalVtruAmount24: 1 }
-    }
-  ]).toArray()
-  
-  const totalVolumeNum = formatEther(totalVolume[0]?.totalVtruAmount || 0) 
-  const totalVolume24Num = formatEther(totalVolume24[0]?.totalVtruAmount24|| 0) 
+  const totalVolume24 = await collection
+    .aggregate([
+      {
+        $match: {
+          vtruAmount: { $exists: true },
+          timestamp: { $gte: oneDayAgo.valueOf() },
+        },
+      },
+      {
+        $addFields: {
+          numericValue: { $toLong: '$vtruAmount' },
+        },
+      },
+      {
+        $group: {
+          _id: null,
+          totalVtruAmount24: { $sum: '$numericValue' },
+        },
+      },
+      {
+        $project: { _id: 0, totalVtruAmount24: 1 },
+      },
+    ])
+    .toArray();
+
+  const totalVolumeNum = formatEther(totalVolume[0]?.totalVtruAmount || 0);
+  const totalVolume24Num = formatEther(
+    totalVolume24[0]?.totalVtruAmount24 || 0
+  );
 
   res.json({
     totalVolume: totalVolumeNum,
-    totalVolume24: totalVolume24Num
-  })
-})
+    totalVolume24: totalVolume24Num,
+  });
+});
 
 async function createIndexes() {
   const db = client.db(DB_NAME);
