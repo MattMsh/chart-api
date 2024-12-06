@@ -37,7 +37,34 @@ let lastCheckedBlock = startBlock;
 let cachedLiquidity = null;
 let lastLiquidityCalculationBlock = startBlock;
 
-app.get('/liquidity', async (req, res) => {
+const getVolume = async () => {
+  const db = client.db(DB_NAME);
+  const collection = db.collection(collectionName);
+
+  const totalVolumeAmounts = await collection
+    .find({ vtruAmount: { $exists: true } })
+    .toArray();
+
+  const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+  const totalVolume24Amounts = await collection
+    .find({
+      vtruAmount: { $exists: true },
+      timestamp: { $gte: oneDayAgo.valueOf() },
+    })
+    .toArray();
+
+  const totalVolumeNum = totalVolumeAmounts
+    .reduce((sum, record) => sum + +formatEther(BigInt(record.vtruAmount)), 0)
+    .toFixed(2);
+  const totalVolume24Num = totalVolume24Amounts
+    .reduce((sum, record) => sum + +formatEther(BigInt(record.vtruAmount)), 0)
+    .toFixed(2);
+
+  return { volume: totalVolumeNum, volume24: totalVolume24Num };
+};
+
+const getLiquidity = async () => {
   const tokens = await factory.read.getAllTokens();
   const pools = await Promise.all(
     tokens.map((token) => factory.read.getPool([token]))
@@ -64,70 +91,17 @@ app.get('/liquidity', async (req, res) => {
     .reduce((sum, amount) => sum + +formatEther(amount), 0)
     .toFixed(2);
 
-  res.json({ liquidity });
-});
+  return liquidity;
+};
 
-app.get('/volume', async (req, res) => {
-  const db = client.db(DB_NAME);
-  const collection = db.collection(collectionName);
-
-  const totalVolume = await collection
-    .aggregate([
-      {
-        $match: { vtruAmount: { $exists: true } },
-      },
-      {
-        $addFields: {
-          numericValue: { $toLong: '$vtruAmount' },
-        },
-      },
-      {
-        $group: {
-          _id: null,
-          totalVtruAmount: { $sum: '$numericValue' },
-        },
-      },
-      {
-        $project: { _id: 0, totalVtruAmount: 1 }, // Step 3: Format the output
-      },
-    ])
-    .toArray();
-
-  const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-
-  const totalVolume24 = await collection
-    .aggregate([
-      {
-        $match: {
-          vtruAmount: { $exists: true },
-          timestamp: { $gte: oneDayAgo.valueOf() },
-        },
-      },
-      {
-        $addFields: {
-          numericValue: { $toLong: '$vtruAmount' },
-        },
-      },
-      {
-        $group: {
-          _id: null,
-          totalVtruAmount24: { $sum: '$numericValue' },
-        },
-      },
-      {
-        $project: { _id: 0, totalVtruAmount24: 1 },
-      },
-    ])
-    .toArray();
-
-  const totalVolumeNum = formatEther(totalVolume[0]?.totalVtruAmount || 0);
-  const totalVolume24Num = formatEther(
-    totalVolume24[0]?.totalVtruAmount24 || 0
-  );
+app.get('/metrics', async (req, res) => {
+  const { volume, volume24 } = await getVolume();
+  const liquidity = await getLiquidity();
 
   res.json({
-    totalVolume: totalVolumeNum,
-    totalVolume24: totalVolume24Num,
+    volume,
+    volume24,
+    liquidity,
   });
 });
 
