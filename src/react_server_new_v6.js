@@ -70,21 +70,13 @@ const getLiquidity = async () => {
     tokens.map((token) => factory.read.getPool([token]))
   );
   const balances = await Promise.all(
-    pools.map(async (pool) => {
-      const virtualBalance = await publicClient.readContract({
-        abi: poolAbi,
-        address: pool,
-        functionName: 'virtualCoinBalance',
-      });
-
-      const realBalance = await publicClient.readContract({
+    pools.map((pool) =>
+      publicClient.readContract({
         abi: poolAbi,
         address: pool,
         functionName: 'realCoinBalance',
-      });
-
-      return virtualBalance + realBalance;
-    })
+      })
+    )
   );
 
   const liquidity = balances
