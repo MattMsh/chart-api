@@ -3,9 +3,9 @@ import { MongoClient } from 'mongodb';
 
 const { MONGO_URI, DB_NAME } = config;
 
-let db = null;
+export let db = null;
 
-export async function getMongoDB() {
+export async function connectMongoDB() {
   if (!db) {
     const client = new MongoClient(MONGO_URI);
     await client.connect();

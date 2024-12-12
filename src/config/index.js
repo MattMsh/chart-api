@@ -9,6 +9,7 @@ const config = {
   DB_NAME: process.env.DB_NAME,
   FACTORY_ADDRESS: process.env.FACTORY_ADDRESS,
   WVTRU_ADDRESS: process.env.WVTRU_ADDRESS,
+  LOCAL_CHAIN: process.env.LOCAL_CHAIN,
 };
 
 export default config;

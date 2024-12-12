@@ -1,56 +1,53 @@
 import express from 'express';
 import http from 'http';
-import { createPublicClient, http as viemHttp, getContract } from 'viem';
 import { retryOperation } from './utils/retryOperation.js';
 import config from './config/index.js';
-import { getApiCounterProvider } from './providers/ApiCallCounterProvider.js';
-import { getMongoDB } from './db/mongoConnector.js';
-import { vitruveo } from './chains/index.js';
+import { connectMongoDB, db } from './db/mongoConnector.js';
 import { factoryAbi } from './abis/factoryAbi.js';
 import { poolAbi } from './abis/poolAbi.js';
+import {
+  updateCache,
+  loadPoolsAndTokens,
+  getTokenByPool,
+} from './services/cachePoolAndToken.js';
+import { publicClient } from './viemClient.js';
+import { getAddress, parseAbiItem, parseEventLogs } from 'viem';
+import { log } from 'console';
 
-const { PORT, FACTORY_ADDRESS } = config;
+const { PORT } = config;
 
 const app = express();
 const server = http.createServer(app);
 
-const publicClient = createPublicClient({
-  chain: vitruveo,
-  transport: viemHttp(),
-});
-
-const factory = getContract({
-  abi: factoryAbi,
-  address: FACTORY_ADDRESS,
-  client: publicClient,
-});
-
-const tokensPools = new Map();
-const poolsTokens = new Map();
-
-async function loadPoolsAndTokens() {
-  const factoryTokens = await factory.read.getAllTokens();
-  await Promise.all(
-    factoryTokens.map(async (token) => {
-      const pool = await factory.read.getPool([token]);
-      const poolLowerCase = pool.toLowerCase();
-      const tokenLowerCase = token.toLowerCase();
-
-      tokensPools.set(tokenLowerCase, poolLowerCase);
-      poolsTokens.set(poolLowerCase, tokenLowerCase);
-    })
-  );
-}
-
 const BLOCK_TIME = 5000; // 5 seconds per block
 const MAX_BLOCKS_TO_PROCESS = 100; // Process up to 10 blocks at once when behind
 
-let db;
 let lastCheckedBlock = 0;
 let allTransactions = {};
 let hasChanges = false;
 
-const provider = getApiCounterProvider();
+const watchEvents = async () => {
+  const event = parseAbiItem(
+    'event Action(address indexed factory, address, uint256, uint256, uint256, string)'
+  );
+
+  const pools = Array.from(getTokenByPool.keys()).map((address) =>
+    getAddress(address)
+  );
+
+  const unwatch = publicClient.watchBlocks({
+    onBlock: async (block) => {
+      const logs = await publicClient.getContractEvents({
+        address: pools,
+        abi: poolAbi,
+        eventName: 'Action',
+        blockHash: block.hash,
+      });
+
+      log(logs);
+    },
+  });
+};
 
 async function loadStoredData() {
   try {
@@ -123,12 +120,8 @@ async function saveData() {
 }
 
 async function processBlock(blockNumber) {
-  // console.log(
-  //   `Processing block ${block.number} with ${block.transactions.length} transactions`
-  // );
-
   const block = await retryOperation(() =>
-    provider.getBlock(blockNumber, true)
+    publicClient.getBlock(blockNumber, true)
   );
 
   if (block.transactions.length <= 0) {
@@ -141,20 +134,13 @@ async function processBlock(blockNumber) {
     eventName: 'PoolCreated',
   });
 
-  if (poolCreatedLogs.length > 0) {
-    const [log] = poolCreatedLogs;
-    const poolAddress = log.args.pool.toLowerCase();
-    const tokenAddress = log.args.token.toLowerCase();
-
-    tokensPools.set(tokenAddress, poolAddress);
-    poolsTokens.set(poolAddress, tokenAddress);
-  }
+  updateCache(poolCreatedLogs);
 
   const logs = await publicClient.getContractEvents({
     abi: poolAbi,
     blockHash: block.hash,
     eventName: 'Action',
-    address: Array.from(poolsTokens.keys()),
+    address: Array.from(getTokenByPool.keys()),
   });
 
   for (const log of logs) {
@@ -164,7 +150,7 @@ async function processBlock(blockNumber) {
     const action = actionType === 0 ? 'buy' : 'sell';
 
     allTransactions[`${transactionHash}_${log.logIndex}`] = {
-      token: poolsTokens.get(log.address),
+      token: getTokenByPool.get(log.address),
       hash: transactionHash,
       blockNumber,
       pool: poolAddress,
@@ -172,7 +158,7 @@ async function processBlock(blockNumber) {
       action,
       tokenAmount: String(tokenAmount),
       vtruAmount: String(vtruAmount),
-      timestamp: block.timestamp * 1000,
+      timestamp: Number(block.timestamp) * 1000,
     };
 
     hasChanges = true;
@@ -184,7 +170,9 @@ async function continuousMonitoring() {
     const startTime = Date.now();
 
     try {
-      const latestBlock = await retryOperation(() => provider.getBlockNumber());
+      const latestBlock = await retryOperation(() =>
+        publicClient.getBlockNumber()
+      ).then((value) => Number(value));
       if (lastCheckedBlock === 0) {
         lastCheckedBlock = latestBlock;
       }
@@ -232,109 +220,6 @@ async function continuousMonitoring() {
   }
 }
 
-// app.get('/api/blockchain-data', async (req, res) => {
-//   console.log('Received request for /api/blockchain-data');
-//   try {
-//     const startBlock = parseInt(req.query.startBlock) || 0;
-//     const limit = parseInt(req.query.limit) || 100;
-//     const skip = parseInt(req.query.skip) || 0;
-
-//     const relevantAddresses = [
-//       TOKEN_ADDRESSES.WVTRU,
-//       TOKEN_ADDRESSES.VTRO,
-//       TOKEN_ADDRESSES.USDC,
-//       TOKEN_ADDRESSES.TKN,
-//       TOKEN_ADDRESSES.PAIRS['WVTRU-USDC.POL'],
-//       PAIRS['VTRO-USDC.POL'],
-//     ];
-
-//     const validFunctionNames = [
-//       'swapExactTokensForTokens',
-//       'swapTokensForExactTokens',
-//       'addLiquidity',
-//       'removeLiquidity',
-//     ];
-
-//     const transactions = await db
-//       .collection('blockchain_data')
-//       .find({
-//         _id: { $ne: 'lastCheckedBlock' },
-//         blockNumber: { $gte: startBlock },
-//         $or: [
-//           { from: { $in: relevantAddresses } },
-//           { to: { $in: relevantAddresses } },
-//           { 'tokenTransfers.token': { $in: relevantAddresses } },
-//           { 'tokenTransfers.from': { $in: relevantAddresses } },
-//           { 'tokenTransfers.to': { $in: relevantAddresses } },
-//         ],
-//         functionName: { $in: validFunctionNames },
-//       })
-//       .sort({ blockNumber: -1 })
-//       .skip(skip)
-//       .limit(limit)
-//       .toArray();
-
-//     const totalCount = await db.collection('blockchain_data').countDocuments({
-//       _id: { $ne: 'lastCheckedBlock' },
-//       blockNumber: { $gte: startBlock },
-//       $or: [
-//         { from: { $in: relevantAddresses } },
-//         { to: { $in: relevantAddresses } },
-//         { 'tokenTransfers.token': { $in: relevantAddresses } },
-//         { 'tokenTransfers.from': { $in: relevantAddresses } },
-//         { 'tokenTransfers.to': { $in: relevantAddresses } },
-//       ],
-//       functionName: { $in: validFunctionNames },
-//     });
-
-//     const lastCheckedBlock = await db
-//       .collection('blockchain_data')
-//       .findOne({ _id: 'lastCheckedBlock' });
-
-//     res.json({
-//       lastCheckedBlock: lastCheckedBlock ? lastCheckedBlock.value : 0,
-//       totalCount,
-//       transactions: transactions.reduce((acc, tx) => {
-//         acc[tx._id] = tx;
-//         return acc;
-//       }, {}),
-//     });
-//   } catch (error) {
-//     console.error('Error reading blockchain data:', error);
-//     res
-//       .status(500)
-//       .json({ error: 'Internal Server Error', message: error.message });
-//   }
-// });
-
-// app.get('/transactions', (req, res) => {
-//   const { from, to, value, data, functionName } = req.query;
-//   const criteria = {};
-//   if (from) criteria.from = from;
-//   if (to) criteria.to = to;
-//   if (value) criteria.value = value;
-//   if (data) criteria.data = data;
-//   if (functionName) criteria.functionName = functionName;
-
-//   const filteredTransactions = Object.values(allTransactions).filter((tx) => {
-//     return Object.entries(criteria).every(([key, value]) => {
-//       if (key === 'functionName' && tx.functionName) {
-//         return tx.functionName.toLowerCase().includes(value.toLowerCase());
-//       }
-//       if (typeof value === 'string') {
-//         return tx[key].toLowerCase().includes(value.toLowerCase());
-//       } else if (Array.isArray(value)) {
-//         return value.some((v) =>
-//           tx[key].toLowerCase().includes(v.toLowerCase())
-//         );
-//       }
-//       return tx[key] === value;
-//     });
-//   });
-
-//   res.json(filteredTransactions);
-// });
-
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error('Unhandled error:', err);
@@ -349,9 +234,10 @@ app.use((err, req, res, next) => {
 server
   .listen(PORT, async () => {
     console.log(`Server is running on port ${PORT}`);
-    db = await getMongoDB();
+    await connectMongoDB();
     await loadStoredData();
     await loadPoolsAndTokens();
+    // await watchEvents();
     continuousMonitoring().catch(console.error);
   })
   .on('error', (error) => {
@@ -368,7 +254,6 @@ server
 process.on('SIGINT', async () => {
   console.log('Shutting down gracefully...');
   await saveData();
-  console.log(`Total API calls made: ${provider.apiCallCount}`);
   server.close(() => {
     console.log('Server closed');
     process.exit(0);

@@ -1,25 +1,19 @@
-import { MongoClient } from 'mongodb';
 import WebSocket, { WebSocketServer } from 'ws';
 import express from 'express';
-import { vitruveo } from './chains/index.js';
+import { formatEther, getContract } from 'viem';
+
+import config from './config/index.js';
 import { factoryAbi } from './abis/factoryAbi.js';
 import { poolAbi } from './abis/poolAbi.js';
-import config from './config/index.js';
-import { createPublicClient, getContract, http } from 'viem';
-import { formatEther } from 'viem';
+import { publicClient } from './viemClient.js';
+import { db, connectMongoDB } from './db/mongoConnector.js';
+import { getPoolByToken } from './services/cachePoolAndToken.js';
 
-const { FACTORY_ADDRESS, DB_NAME, MONGO_URI } = config;
+const { FACTORY_ADDRESS, DB_NAME } = config;
 const collectionName = DB_NAME;
 const wsPort = 8088;
 const httpPort = 3003;
-const startBlock = 6809140; // Skip blocks prior to this one
-
-const cachedPools = new Map();
-
-const publicClient = createPublicClient({
-  chain: vitruveo,
-  transport: http(),
-});
+const startBlock = 6809140;
 
 const factory = getContract({
   abi: factoryAbi,
@@ -27,18 +21,11 @@ const factory = getContract({
   client: publicClient,
 });
 
-const client = new MongoClient(MONGO_URI, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
-});
 const app = express();
 
 let lastCheckedBlock = startBlock;
-let cachedLiquidity = null;
-let lastLiquidityCalculationBlock = startBlock;
 
 const getVolume = async () => {
-  const db = client.db(DB_NAME);
   const collection = db.collection(collectionName);
 
   const totalVolumeAmounts = await collection
@@ -98,7 +85,6 @@ app.get('/metrics', async (req, res) => {
 });
 
 async function createIndexes() {
-  const db = client.db(DB_NAME);
   const collection = db.collection(collectionName);
 
   await collection.createIndex({ blockNumber: -1 });
@@ -106,7 +92,6 @@ async function createIndexes() {
 }
 
 async function getLatestTransactions(tokenAddress, page, limit) {
-  const db = client.db(DB_NAME);
   const collection = db.collection(collectionName);
 
   const query = tokenAddress ? await getPairQueryV2(tokenAddress) : {};
@@ -132,52 +117,7 @@ async function getLatestTransactions(tokenAddress, page, limit) {
   return transactions;
 }
 
-// async function calculateLiquidity(pair) {
-//   const db = client.db(DB_NAME);
-//   const collection = db.collection(collectionName);
-
-//   const query = {
-//     functionName: { $regex: /^addliquidity|^removeliquidity/i },
-//     tokenTransfers: {
-//       $elemMatch: {
-//         token: '0xbcfb3fca16b12c7756cd6c24f1cc0ac0e38569cf', // USDC.POL token
-//         to: '0x8B3808260a058ECfFA9b1d0eaA988A1b4167DDba', // WVTRU LP address
-//       },
-//     },
-//   };
-
-//   const transactions = await collection.find(query).toArray();
-
-//   let liquidity = cachedLiquidity || 0;
-//   transactions.forEach((tx) => {
-//     tx.tokenTransfers.forEach((transfer) => {
-//       if (
-//         transfer.token === '0xbcfb3fca16b12c7756cd6c24f1cc0ac0e38569cf' &&
-//         transfer.to === '0x8B3808260a058ECfFA9b1d0eaA988A1b4167DDba'
-//       ) {
-//         liquidity += parseFloat(transfer.amount);
-//       }
-//     });
-//   });
-
-//   cachedLiquidity = liquidity * 2; // Since it's a V2 LP, we double the liquidity.
-//   lastLiquidityCalculationBlock =
-//     transactions.length > 0
-//       ? transactions[transactions.length - 1].blockNumber
-//       : lastLiquidityCalculationBlock;
-
-//   return cachedLiquidity;
-// }
-
-// async function getLiquidityData(pair) {
-//   if (cachedLiquidity !== null) {
-//     return cachedLiquidity;
-//   }
-//   return await calculateLiquidity(pair);
-// }
-
 async function get24HourData(tokenAddress) {
-  const db = client.db(DB_NAME);
   const collection = db.collection(collectionName);
 
   const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
@@ -190,7 +130,6 @@ async function get24HourData(tokenAddress) {
 }
 
 async function getTotalTransactionCount(tokenAddress) {
-  const db = client.db(DB_NAME);
   const collection = db.collection(collectionName);
 
   const query = tokenAddress ? await getPairQueryV2(tokenAddress) : {};
@@ -200,11 +139,11 @@ async function getTotalTransactionCount(tokenAddress) {
 }
 
 async function getPairQueryV2(tokenAddress) {
-  let lpAddress = cachedPools.get(tokenAddress);
+  let lpAddress = getPoolByToken.get(tokenAddress);
 
   if (!lpAddress) {
     lpAddress = await factory.read.getPool([tokenAddress]);
-    cachedPools.set(tokenAddress, lpAddress);
+    getPoolByToken.set(tokenAddress, lpAddress);
   }
 
   return {
@@ -229,7 +168,6 @@ async function processTransaction(tx, wss) {
 
 async function pollDatabase(wss) {
   try {
-    const db = client.db(DB_NAME);
     const collection = db.collection(collectionName);
 
     setInterval(async () => {
@@ -260,7 +198,7 @@ async function pollDatabase(wss) {
 
 async function startServer() {
   try {
-    await client.connect();
+    await connectMongoDB();
     console.log('Connected to MongoDB');
 
     await createIndexes();
