@@ -9,11 +9,11 @@ import { publicClient } from './viemClient.js';
 import { db, connectMongoDB } from './db/mongoConnector.js';
 import { getPoolByToken } from './services/cachePoolAndToken.js';
 
-const { FACTORY_ADDRESS, DB_NAME } = config;
+const { FACTORY_ADDRESS, DB_NAME, WS_CLIENT_API_PORT, CLIENT_API_PORT } =
+  config;
 const collectionName = DB_NAME;
-const wsPort = 8088;
-const httpPort = 3003;
-const startBlock = 6809140;
+const wsPort = WS_CLIENT_API_PORT;
+const httpPort = CLIENT_API_PORT;
 
 const factory = getContract({
   abi: factoryAbi,
@@ -96,8 +96,6 @@ async function getLatestTransactions(tokenAddress, page, limit) {
 
   const query = tokenAddress ? await getPairQueryV2(tokenAddress) : {};
 
-  query.blockNumber = { $gte: startBlock };
-
   console.log('Fetching transactions with query:', JSON.stringify(query));
   console.log('Sorting by blockNumber in descending order');
 
@@ -123,7 +121,6 @@ async function get24HourData(tokenAddress) {
   const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
   const query = tokenAddress ? await getPairQueryV2(tokenAddress) : {};
-  query.blockNumber = { $gte: startBlock };
   query.timestamp = { $gte: oneDayAgo.getTime() };
 
   return await collection.find(query).toArray();
@@ -133,7 +130,6 @@ async function getTotalTransactionCount(tokenAddress) {
   const collection = db.collection(collectionName);
 
   const query = tokenAddress ? await getPairQueryV2(tokenAddress) : {};
-  query.blockNumber = { $gte: startBlock };
 
   return await collection.countDocuments(query);
 }
