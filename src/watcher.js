@@ -146,7 +146,7 @@ async function processBlock(blockNumber) {
   for (const log of logs) {
     const { transactionHash, blockNumber, args } = log;
     const [, initiator, tokenAmount, vtruAmount, actionType] = args;
-    const poolAddress = log.address;
+    const poolAddress = log.address.toLowerCase();
     const action = actionType === 0 ? 'buy' : 'sell';
 
     allTransactions[`${transactionHash}_${log.logIndex}`] = {
