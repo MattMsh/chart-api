@@ -21,7 +21,7 @@ export const vitruveo = defineChain({
 });
 
 export const anvil = defineChain({
-  id: 31777,
+  id: 31337,
   name: 'Anvil',
   nativeCurrency: {
     name: 'Anvil',

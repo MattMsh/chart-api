@@ -1,7 +1,6 @@
 import WebSocket, { WebSocketServer } from 'ws';
 import express from 'express';
 import { formatEther, getContract } from 'viem';
-
 import config from './config/index.js';
 import { factoryAbi } from './abis/factoryAbi.js';
 import { poolAbi } from './abis/poolAbi.js';
@@ -23,7 +22,7 @@ const factory = getContract({
 
 const app = express();
 
-let lastCheckedBlock = startBlock;
+let lastCheckedBlock = 0;
 
 const getVolume = async () => {
   const collection = db.collection(collectionName);
