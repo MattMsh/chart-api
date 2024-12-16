@@ -29,9 +29,6 @@ async function loadPoolsAndTokens() {
 }
 
 function updateCache(logs) {
-  if (logs.length < 1) {
-    return;
-  }
   logs.forEach((log) => {
     const poolAddress = log.args.pool.toLowerCase();
     const tokenAddress = log.args.token.toLowerCase();
