@@ -1,6 +1,5 @@
 import express from 'express';
 import http from 'http';
-import { retryOperation } from './utils/retryOperation.js';
 import config from './config/index.js';
 import { connectMongoDB, db } from './db/mongoConnector.js';
 import { factoryAbi } from './abis/factoryAbi.js';
@@ -11,43 +10,13 @@ import {
   getTokenByPool,
 } from './services/cachePoolAndToken.js';
 import { publicClient } from './viemClient.js';
-import { getAddress, parseAbiItem, parseEventLogs } from 'viem';
-import { log } from 'console';
 
 const { PORT } = config;
 
 const app = express();
 const server = http.createServer(app);
 
-const BLOCK_TIME = 5000; // 5 seconds per block
-const MAX_BLOCKS_TO_PROCESS = 100; // Process up to 10 blocks at once when behind
-
 let lastCheckedBlock = 0;
-let allTransactions = {};
-let hasChanges = false;
-
-const watchEvents = async () => {
-  const event = parseAbiItem(
-    'event Action(address indexed factory, address, uint256, uint256, uint256, string)'
-  );
-
-  const pools = Array.from(getTokenByPool.keys()).map((address) =>
-    getAddress(address)
-  );
-
-  const unwatch = publicClient.watchBlocks({
-    onBlock: async (block) => {
-      const logs = await publicClient.getContractEvents({
-        address: pools,
-        abi: poolAbi,
-        eventName: 'Action',
-        blockHash: block.hash,
-      });
-
-      log(logs);
-    },
-  });
-};
 
 async function loadStoredData() {
   try {
@@ -57,34 +26,14 @@ async function loadStoredData() {
 
     lastCheckedBlock = lastBlockDoc ? lastBlockDoc.value : 0;
 
-    const transactionsCursor = db
-      .collection('blockchain_data')
-      .find({ _id: { $ne: 'lastCheckedBlock' } });
-    allTransactions = await transactionsCursor.toArray().then((docs) =>
-      docs.reduce((acc, doc) => {
-        acc[doc._id] = doc;
-        return acc;
-      }, {})
-    );
-
-    console.log(
-      `Loaded data: Last checked block ${lastCheckedBlock}, ${
-        Object.keys(allTransactions).length
-      } stored transactions`
-    );
+    console.log(`Loaded data: Last checked block ${lastCheckedBlock}`);
   } catch (error) {
     console.error('Error loading stored data:', error);
     lastCheckedBlock = 0;
-    allTransactions = {};
   }
 }
 
-async function saveData() {
-  if (!hasChanges) {
-    console.log('No changes to save');
-    return;
-  }
-
+async function saveData(transactions) {
   try {
     await db
       .collection('blockchain_data')
@@ -94,37 +43,68 @@ async function saveData() {
         { upsert: true }
       );
 
-    const operations = Object.entries(allTransactions).map(([key, value]) => ({
-      replaceOne: {
-        filter: { _id: key },
-        replacement: { _id: key, ...value },
-        upsert: true,
-      },
-    }));
+    const operations = transactions.map((tx) => {
+      const id = tx.id;
+      delete tx.id;
 
-    console.dir({ operations }, { depth: Infinity });
+      return {
+        replaceOne: {
+          filter: { _id: id },
+          replacement: { _id: id, ...tx },
+          upsert: true,
+        },
+      };
+    });
 
     if (operations.length > 0) {
       await db.collection('blockchain_data').bulkWrite(operations);
     }
 
     console.log(
-      `Data saved successfully. Last checked block: ${lastCheckedBlock}, Stored transactions: ${
-        Object.keys(allTransactions).length
-      }`
+      `Data saved successfully. Last checked block: ${lastCheckedBlock}`
     );
-    hasChanges = false;
   } catch (error) {
     console.error('Error saving data:', error);
   }
 }
 
-async function processBlock(blockNumber) {
-  const block = await retryOperation(() =>
-    publicClient.getBlock(blockNumber, true)
-  );
+async function processEventLog(log) {
+  const { transactionHash, blockNumber, args } = log;
+  const block = await publicClient.getBlock({ blockNumber });
 
-  if (block.transactions.length <= 0) {
+  const [, initiator, tokenAmount, vtruAmount, actionType] = args;
+  const poolAddress = log.address.toLowerCase();
+  const action = actionType === 0 ? 'buy' : 'sell';
+
+  return {
+    id: `${transactionHash}_${log.logIndex}`,
+    token: getTokenByPool.get(log.address),
+    hash: transactionHash,
+    blockNumber,
+    pool: poolAddress,
+    client: initiator,
+    action,
+    tokenAmount: String(tokenAmount),
+    vtruAmount: String(vtruAmount),
+    timestamp: Number(block.timestamp) * 1000,
+  };
+}
+
+function processEventLogs(logs) {
+  return Promise.all(logs.map((log) => processEventLog(log)));
+}
+
+function getActionEventLogs(blockHash) {
+  return publicClient.getContractEvents({
+    abi: poolAbi,
+    blockHash,
+    eventName: 'Action',
+    address: Array.from(getTokenByPool.keys()),
+  });
+}
+
+async function processBlock(block) {
+  if (block.transactions.length === 0) {
     return;
   }
 
@@ -134,90 +114,37 @@ async function processBlock(blockNumber) {
     eventName: 'PoolCreated',
   });
 
-  updateCache(poolCreatedLogs);
-
-  const logs = await publicClient.getContractEvents({
-    abi: poolAbi,
-    blockHash: block.hash,
-    eventName: 'Action',
-    address: Array.from(getTokenByPool.keys()),
-  });
-
-  for (const log of logs) {
-    const { transactionHash, blockNumber, args } = log;
-    const [, initiator, tokenAmount, vtruAmount, actionType] = args;
-    const poolAddress = log.address.toLowerCase();
-    const action = actionType === 0 ? 'buy' : 'sell';
-
-    allTransactions[`${transactionHash}_${log.logIndex}`] = {
-      token: getTokenByPool.get(log.address),
-      hash: transactionHash,
-      blockNumber,
-      pool: poolAddress,
-      client: initiator,
-      action,
-      tokenAmount: String(tokenAmount),
-      vtruAmount: String(vtruAmount),
-      timestamp: Number(block.timestamp) * 1000,
-    };
-
-    hasChanges = true;
+  if (poolCreatedLogs.length > 0) {
+    updateCache(poolCreatedLogs);
   }
+
+  const logs = await getActionEventLogs(block.hash);
+  const processedLogs = await processEventLogs(logs);
+  await saveData(processedLogs);
 }
 
 async function continuousMonitoring() {
-  while (true) {
-    const startTime = Date.now();
+  const events = await publicClient.getContractEvents({
+    abi: poolAbi,
+    address: Array.from(getTokenByPool.keys()),
+    fromBlock: BigInt(lastCheckedBlock),
+    eventName: 'Action',
+    strict: true,
+  });
 
-    try {
-      const latestBlock = await retryOperation(() =>
-        publicClient.getBlockNumber()
-      ).then((value) => Number(value));
-      if (lastCheckedBlock === 0) {
-        lastCheckedBlock = latestBlock;
-      }
+  const eventsToSave = await processEventLogs(events);
+  lastCheckedBlock = await publicClient.getBlockNumber();
+  await saveData(eventsToSave);
 
-      if (latestBlock > lastCheckedBlock) {
-        console.log(
-          `Current latest block: ${latestBlock}, Last checked block: ${lastCheckedBlock}`
-        );
-
-        const blocksToProcess = Math.min(
-          latestBlock - lastCheckedBlock,
-          MAX_BLOCKS_TO_PROCESS
-        );
-
-        const handlesBlocks = [];
-        for (let i = 0; i < blocksToProcess; i++) {
-          handlesBlocks.push(processBlock(lastCheckedBlock));
-          lastCheckedBlock++;
-        }
-        await Promise.all(handlesBlocks);
-
-        if (hasChanges) {
-          await saveData();
-        }
-
-        // If we're still behind, continue immediately
-        if (latestBlock > lastCheckedBlock) {
-          continue;
-        }
-      } else {
-        console.log(
-          `No new blocks. Current: ${latestBlock}, Last checked: ${lastCheckedBlock}`
-        );
-      }
-    } catch (error) {
-      console.error('Error in monitoring cycle:', error);
-    }
-
-    // Wait until the next block is expected
-    const elapsedTime = Date.now() - startTime;
-    const waitTime = Math.max(BLOCK_TIME - elapsedTime, 0);
-    console.log({ waitTime });
-
-    await new Promise((resolve) => setTimeout(resolve, waitTime));
-  }
+  publicClient.watchBlocks({
+    onBlock: async (block) => {
+      lastCheckedBlock = block.number;
+      await processBlock(block);
+    },
+    onError: (error) => {
+      console.error('Error in WATCH BLOCKS: ', error);
+    },
+  });
 }
 
 // Error handling middleware
@@ -237,8 +164,7 @@ server
     await connectMongoDB();
     await loadStoredData();
     await loadPoolsAndTokens();
-    // await watchEvents();
-    continuousMonitoring().catch(console.error);
+    continuousMonitoring();
   })
   .on('error', (error) => {
     if (error.code === 'EADDRINUSE') {
@@ -253,7 +179,6 @@ server
 
 process.on('SIGINT', async () => {
   console.log('Shutting down gracefully...');
-  await saveData();
   server.close(() => {
     console.log('Server closed');
     process.exit(0);
