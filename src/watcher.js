@@ -139,6 +139,7 @@ async function continuousMonitoring() {
   publicClient.watchBlocks({
     onBlock: async (block) => {
       lastCheckedBlock = block.number;
+      console.log('Block', block.number);
       await processBlock(block);
     },
     onError: (error) => {
