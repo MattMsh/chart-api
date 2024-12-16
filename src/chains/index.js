@@ -9,7 +9,10 @@ export const vitruveo = defineChain({
     decimals: 18,
   },
   rpcUrls: {
-    default: { http: ['https://rpc.vitruveo.xyz/'] },
+    default: {
+      http: ['https://rpc.vitruveo.xyz/'],
+      webSocket: ['ws://77.237.237.200:8546'],
+    },
   },
   blockExplorers: {
     default: {
