@@ -1,20 +1,10 @@
-import { getContract } from 'viem';
-import { factoryAbi } from '../abis/factoryAbi.js';
-import config from '../config/index.js';
-import { publicClient } from '../viemClient.js';
-
-const { FACTORY_ADDRESS } = config;
+import { isAddress } from 'viem';
+import { factory, factoryV2 } from '../contracts/index.js';
 
 const getPoolByToken = new Map();
 const getTokenByPool = new Map();
 
-const factory = getContract({
-  abi: factoryAbi,
-  address: FACTORY_ADDRESS,
-  client: publicClient,
-});
-
-async function loadPoolsAndTokens() {
+async function loadPoolsAndTokensByFactory(factory) {
   const factoryTokens = await factory.read.getAllTokens();
   await Promise.all(
     factoryTokens.map(async (token) => {
@@ -26,6 +16,14 @@ async function loadPoolsAndTokens() {
       getTokenByPool.set(poolLowerCase, tokenLowerCase);
     })
   );
+}
+
+async function loadPoolsAndTokens() {
+  [factory, factoryV2]
+    .filter((contract) => isAddress(contract.address))
+    .forEach(async (factory) => {
+      await loadPoolsAndTokensByFactory(factory);
+    });
 }
 
 function updateCache(logs) {

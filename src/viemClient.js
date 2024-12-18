@@ -7,5 +7,4 @@ const { LOCAL_CHAIN } = config;
 export const publicClient = createPublicClient({
   chain: LOCAL_CHAIN ? anvil : vitruveo,
   transport: webSocket(),
-  pollingInterval: 5000,
 });
