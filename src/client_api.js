@@ -64,7 +64,8 @@ async function getPairQueryV2(tokenAddress) {
 
   if (!lpAddress) {
     lpAddress = await factory.read.getPool([tokenAddress]);
-    if (!lpAddress && factoryV2.address) {
+    // If address zero
+    if (parseInt(lpAddress) === 0) {
       lpAddress = await factoryV2.read.getPool([tokenAddress]);
     }
     getPoolByToken.set(tokenAddress, lpAddress);
