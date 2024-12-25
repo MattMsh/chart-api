@@ -3,7 +3,7 @@ import { factoryAbi } from '../abis/factoryAbi.js';
 import { publicClient } from '../viemClient.js';
 import config from '../config/index.js';
 
-const { FACTORY_ADDRESS, FACTORY_V2_ADDRESS } = config;
+const { FACTORY_ADDRESS, FACTORY_V2_ADDRESS, FACTORY_V3_ADDRESS } = config;
 
 export const factory = getContract({
   abi: factoryAbi,
@@ -14,5 +14,11 @@ export const factory = getContract({
 export const factoryV2 = getContract({
   abi: factoryAbi,
   address: FACTORY_V2_ADDRESS,
+  client: publicClient,
+});
+
+export const factoryV3 = getContract({
+  abi: factoryAbi,
+  address: FACTORY_V3_ADDRESS,
   client: publicClient,
 });

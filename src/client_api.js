@@ -2,7 +2,7 @@ import WebSocket, { WebSocketServer } from 'ws';
 import config from './config/index.js';
 import { db, connectMongoDB } from './db/mongoConnector.js';
 import { getPoolByToken } from './services/cachePoolAndToken.js';
-import { factory, factoryV2 } from './contracts/index.js';
+import { factory, factoryV2, factoryV3 } from './contracts/index.js';
 
 const { DB_NAME, WS_CLIENT_API_PORT } = config;
 const collectionName = DB_NAME;
@@ -68,8 +68,13 @@ async function getPairQueryV2(tokenAddress) {
     if (parseInt(lpAddress) === 0) {
       lpAddress = await factoryV2.read.getPool([tokenAddress]);
     }
+    if (parseInt(lpAddress) === 0) {
+      lpAddress = await factoryV3.read.getPool([tokenAddress]);
+    }
     getPoolByToken.set(tokenAddress, lpAddress);
   }
+
+  console.log(lpAddress);
 
   return {
     token: tokenAddress.toLowerCase(),
