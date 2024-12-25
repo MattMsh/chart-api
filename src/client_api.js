@@ -68,7 +68,6 @@ async function getPairQueryV2(tokenAddress) {
     if (parseInt(lpAddress) === 0) {
       lpAddress = await factoryV2.read.getPool([tokenAddress]);
     }
-
     if (parseInt(lpAddress) === 0) {
       lpAddress = await factoryV3.read.getPool([tokenAddress]);
     }
