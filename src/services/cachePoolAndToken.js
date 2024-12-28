@@ -1,5 +1,5 @@
 import { isAddress } from 'viem';
-import { factory, factoryV2 } from '../contracts/index.js';
+import { factory, factoryV2, factoryV3 } from '../contracts/index.js';
 
 const getPoolByToken = new Map();
 const getTokenByPool = new Map();
@@ -19,11 +19,11 @@ async function loadPoolsAndTokensByFactory(factory) {
 }
 
 async function loadPoolsAndTokens() {
-  [factory, factoryV2]
-    .filter((contract) => isAddress(contract.address))
-    .forEach(async (factory) => {
-      await loadPoolsAndTokensByFactory(factory);
-    });
+  await Promise.all(
+    [factory, factoryV2, factoryV3]
+      .filter((contract) => isAddress(contract.address))
+      .map((factory) => loadPoolsAndTokensByFactory(factory))
+  );
 }
 
 function updateCache(logs) {
